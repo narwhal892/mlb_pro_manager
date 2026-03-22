@@ -1,0 +1,46 @@
+import random
+from character import Catcher, Pitcher
+
+hitter = Catcher("JT Realmuto", ops=600, average=300, slugging=400)
+pitcher = Pitcher("Paul Skenes", avg_modifier=.85, slg_modifier=.8, stamina=100)
+
+
+def face_off(Catcher, Pitcher):
+    # Convert stats to real percentages
+    base_avg = hitter.average / 1000     # .280
+    base_slg = hitter.slugging / 1000    # .400
+
+    # Apply pitcher modifiers
+    effective_avg = base_avg * pitcher.avg_modifier
+    effective_slg = base_slg * pitcher.slg_modifier
+
+    # Roll for contact
+    roll = random.random()
+    print(f"Contact roll: {roll}, Effective AVG: {effective_avg}")
+
+    if roll > effective_avg:
+        print(f"{hitter.character_name} is OUT.")
+        return "out"
+
+    # It's a hit — determine type
+    power_roll = random.random()
+    print(f"Power roll: {power_roll}, Effective SLG: {effective_slg}")
+    # weights for slugging. add updated formula later
+    single_chance = 0.45 
+    double_chance = 0.25
+    triple_chance = 0.05
+    homer_chance = effective_slg  
+
+    if power_roll < homer_chance:
+        hit = "Home Run"
+    elif power_roll < homer_chance + triple_chance:
+        hit = "Triple"
+    elif power_roll < homer_chance + triple_chance + double_chance:
+        hit = "Double"
+    else:
+        hit = "Single"
+
+    print(f"{hitter.character_name} gets a HIT! ({hit})")
+    return hit
+    
+face_off(Catcher, Pitcher)

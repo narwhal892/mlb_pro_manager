@@ -1,0 +1,114 @@
+# test_character.py
+
+from character import Pitcher, Catcher, Coach  # Import your classes
+
+def test_character_creation():
+    """Test creating a basic character"""
+    print("Testing character creation...")
+    
+    # Create a character
+    JT_Realmuto = Catcher("JT Realmuto", ops=600, average=280, slugging=400)
+    
+    # Verify attributes are set correctly
+    assert JT_Realmuto.character_name == "JT Realmuto"
+    assert JT_Realmuto.ops == 600
+    assert JT_Realmuto.average == 280
+    assert JT_Realmuto.slugging == 400
+    
+    print("✓ Character creation works!")
+
+def test_pitcher_stamina_reduction():
+    pitcher = Pitcher("Paul Skenes", avg_modifier=0.85, slg_modifier=0.75, stamina=100)
+    loss = pitcher.reduce_stamina(20)
+
+    assert loss == 20
+    assert pitcher.stamina == 80
+    print(f"{pitcher.character_name} stamina is {pitcher.stamina}.")
+
+    print("✓ stamina reduction works!")
+
+def test_pitcher_heal():
+    pitcher = Pitcher("Paul Skenes", avg_modifier=0.85, slg_modifier=0.75, stamina=60)
+    pitcher.heal(10)
+
+    assert pitcher.stamina == 70
+    print(f"{pitcher.character_name} stamina after healing is {pitcher.stamina}")
+    print("✓ healing works!")
+
+def is_alive():
+    pitcher = Pitcher("Paul Skenes", avg_modifier=0.85, slg_modifier=0.75, stamina=0)
+
+    assert pitcher.is_alive() == False
+    print("✓ is alive works!")
+
+def stamina_below_max():
+    pitcher = Pitcher("Paul Skenes", avg_modifier=0.85, slg_modifier=0.75, stamina=80)
+    pitcher.heal(40)
+
+    assert pitcher.stamina == 100
+    print("✓ stamina cant go above max!")
+
+def stamina_above_zero():
+    pitcher = Pitcher("Paul Skenes", avg_modifier=0.85, slg_modifier=0.75, stamina=20)
+    pitcher.reduce_stamina(30)
+
+    assert pitcher.stamina == 0
+    print("✓ stamina cant go below zero!")
+
+def test_hot_streak():
+    pitcher = Pitcher("Paul Skenes", avg_modifier=0.85, slg_modifier=0.75, stamina=100)
+    pitcher.special_ability(0.1)
+
+    assert pitcher.avg_modifier == 0.95
+    assert pitcher.slg_modifier == 0.85
+    print("✓ hot streak works!")
+
+def test_motivational_speech():
+    pitcher = Pitcher("Paul Skenes", avg_modifier=0.85, slg_modifier=0.75, stamina=50)
+    coach = Coach("greg", ops_plus=75, average_plus=15, slugging_plus=20)
+    coach.motivational_speech(pitcher)
+    assert pitcher.stamina == 90
+
+    print("✓ motivational speech works!")
+
+def coach_improves_stats():
+    coach = Coach("greg", ops_plus=75, average_plus=15, slugging_plus=20)
+    hitter=Catcher("JT Realmuto", ops=600, average=280, slugging=400)
+    coach.apply_coaching(hitter)
+
+    assert hitter.ops == 675
+    assert hitter.average == 295
+    assert hitter.slugging == 420
+
+    print("✓ coach stat improvements work!")
+
+def test_character_preview():
+    pitcher = Pitcher("Paul Skenes", avg_modifier=0.85, slg_modifier=0.75, stamina=100)
+    assert pitcher.get_preview_image() == "../graphics/game characters/pitcher.png"
+    Pitcher.get_preview_image()
+
+    print("✓ character preview image works!")
+
+def run_all_tests():
+    """Run all tests"""
+    print("="*50)
+    print("Running Character Tests")
+    print("="*50)
+    
+    test_character_creation()
+    test_pitcher_stamina_reduction()
+    test_pitcher_heal()
+    is_alive()
+    stamina_above_zero()
+    stamina_below_max()
+    test_hot_streak()
+    test_motivational_speech()
+    coach_improves_stats()
+    test_character_preview()
+
+    print("="*50)
+    print("All tests passed! ✓")
+    print("="*50)
+
+if __name__ == "__main__":
+    run_all_tests()

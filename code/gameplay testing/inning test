@@ -1,0 +1,158 @@
+# inning_simulator.py
+# Uses your hitter.average/slugging and pitcher.average_minus/slugging_minus
+# Simulates ONE half-inning (3 outs) and prints play-by-play + runs.
+
+import random
+from collections import deque
+
+def face_off(hitter, pitcher):
+    """Returns: "out" or one of {"single","double","triple","homerun"}"""
+    base_avg = hitter.average / 1000.0
+    base_slg = hitter.slugging / 1000.0
+
+    # Apply pitcher reductions (points -> probability)
+    effective_avg = max(0.0, base_avg - (getattr(pitcher, "average_minus", 0) / 1000.0))
+    effective_slg = max(0.0, base_slg - (getattr(pitcher, "slugging_minus", 0) / 1000.0))
+
+    # Hit or out
+    if random.random() > effective_avg:
+        return "out"
+
+    # Hit type (SLG biases extra bases)
+    # Map effective_slg (~.250 to ~.650) into extra-base boost 0..1
+    extra_boost = max(0.0, min(1.0, (effective_slg - 0.300) / 0.500))
+
+    w_1b = 0.65 - 0.25 * extra_boost
+    w_2b = 0.20 + 0.10 * extra_boost
+    w_3b = 0.05
+    w_hr = 0.10 + 0.15 * extra_boost
+
+    total = w_1b + w_2b + w_3b + w_hr
+    w_1b, w_2b, w_3b, w_hr = (w_1b/total, w_2b/total, w_3b/total, w_hr/total)
+
+    r = random.random()
+    if r < w_hr:
+        return "homerun"
+    elif r < w_hr + w_3b:
+        return "triple"
+    elif r < w_hr + w_3b + w_2b:
+        return "double"
+    else:
+        return "single"
+
+
+def advance_runners(bases, bases_taken):
+    """
+    bases: [on_1st, on_2nd, on_3rd]
+    bases_taken: 1,2,3,4 (4 = HR)
+    Returns (new_bases, runs_scored)
+    """
+    runs = 0
+    on_1st, on_2nd, on_3rd = bases
+
+    # Home run: everyone scores + batter
+    if bases_taken == 4:
+        runs += int(on_1st) + int(on_2nd) + int(on_3rd) + 1
+        return [False, False, False], runs
+
+    # NEW RULE:
+    # Any hit scores runners on 2nd and 3rd
+    if on_2nd:
+        runs += 1
+    if on_3rd:
+        runs += 1
+
+    new_bases = [False, False, False]
+
+    # Handle runner on 1st
+    if on_1st:
+        new_base = 1 + bases_taken
+        if new_base >= 4:
+            runs += 1
+        else:
+            new_bases[new_base - 1] = True
+
+    # Place batter
+    new_bases[bases_taken - 1] = True
+
+    return new_bases, runs
+
+
+
+def bases_str(bases):
+    return f"[1B={'X' if bases[0] else '-'} 2B={'X' if bases[1] else '-'} 3B={'X' if bases[2] else '-'}]"
+
+
+def simulate_half_inning(lineup, pitcher, *, verbose=True, start_batter_index=0):
+    """
+    lineup: list of hitter objects with .character_name, .average, .slugging
+    pitcher: object with .character_name and .average_minus/.slugging_minus
+    Returns: dict with runs, outs, next_batter_index
+    """
+    outs = 0
+    runs = 0
+    bases = [False, False, False]  # 1st, 2nd, 3rd
+    i = start_batter_index
+    n = len(lineup)
+
+    if verbose:
+        pname = getattr(pitcher, "character_name", "Pitcher")
+        print(f"\n--- Half Inning vs {pname} ---")
+
+    while outs < 3:
+        hitter = lineup[i]
+        hname = getattr(hitter, "character_name", f"Hitter{i+1}")
+
+        result = face_off(hitter, pitcher)
+
+        if result == "out":
+            outs += 1
+            if verbose:
+                print(f"{hname}: OUT  | Outs: {outs}  Bases: {bases_str(bases)}")
+        else:
+            bases_taken = {"single": 1, "double": 2, "triple": 3, "homerun": 4}[result]
+            bases, scored = advance_runners(bases, bases_taken)
+            runs += scored
+            if verbose:
+                print(f"{hname}: {result.upper()} (+{scored} R) | Outs: {outs}  Bases: {bases_str(bases)}  Runs: {runs}")
+
+        i = (i + 1) % n
+
+    if verbose:
+        print(f"--- End Half Inning: {runs} run(s) ---\n")
+
+    return {"runs": runs, "outs": outs, "next_batter_index": i}
+
+
+# ----------------------------
+# Quick demo (optional)
+# ----------------------------
+if __name__ == "__main__":
+    class DummyHitter:
+        def __init__(self, name, avg, slg):
+            self.character_name = name
+            self.average = avg
+            self.slugging = slg
+
+    class DummyPitcher:
+        def __init__(self, name, avg_minus=10, slg_minus=50):
+            self.character_name = name
+            self.average_minus = avg_minus
+            self.slugging_minus = slg_minus
+
+    lineup = [
+        DummyHitter("Leadoff", 290, 380),
+        DummyHitter("2-Hole", 275, 410),
+        DummyHitter("3-Hole", 300, 580),
+        DummyHitter("Cleanup", 265, 650),
+        DummyHitter("5", 255, 430),
+        DummyHitter("6", 240, 390),
+        DummyHitter("7", 235, 360),
+        DummyHitter("8", 250, 370),
+        DummyHitter("9", 245, 350),
+    ]
+
+    pitcher = DummyPitcher("Paul Skenes", avg_minus=10, slg_minus=50)
+
+    simulate_half_inning(lineup, pitcher, verbose=True)
+
