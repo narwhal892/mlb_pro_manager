@@ -93,6 +93,30 @@ def apply_walk_or_hbp(bases):
 
     return [on_1st, on_2nd, on_3rd], runs
 
+def bases_text(bases):
+    labels = []
+    if bases[0]:
+        labels.append("1B")
+    if bases[1]:
+        labels.append("2B")
+    if bases[2]:
+        labels.append("3B")
+    return "Empty" if not labels else "-".join(labels)
+
+
+def outcome_text(outcome):
+    mapping = {
+        "out": "ground/fly out",
+        "strikeout": "strikeout",
+        "walk": "walk",
+        "hbp": "hit by pitch",
+        "single": "single",
+        "double": "double",
+        "triple": "triple",
+        "homerun": "home run",
+    }
+    return mapping.get(outcome, outcome)
+
 def apply_hit(bases, hit_type):
     on_1st, on_2nd, on_3rd = bases
     runs = 0
@@ -167,17 +191,83 @@ def update_hitter_stats(hitter, outcome, rbis=0):
         hitter.outs += 1
 
 def update_pitcher_stats(pitcher, outcome, runs_scored):
+    target = getattr(pitcher, "_stat_target", pitcher)
     if outcome in ("single", "double", "triple", "homerun"):
-        pitcher.hits_allowed += 1
+        target.hits_allowed += 1
     elif outcome == "walk":
-        pitcher.walks += 1
+        target.walks += 1
     elif outcome == "hbp":
-        pitcher.hbps += 1
+        target.hbps += 1
     elif outcome == "strikeout":
-        pitcher.strikeouts += 1
+        target.strikeouts += 1
 
-    pitcher.runs_allowed += runs_scored
-    pitcher.earned_runs += runs_scored
+    target.runs_allowed += runs_scored
+    target.earned_runs += runs_scored
+
+def simulate_half_inning_detailed(lineup, pitcher, start_idx=0):
+    outs = 0
+    runs = 0
+    bases = [False, False, False]
+    i = start_idx
+    n = len(lineup)
+    plays = []
+    hits_in_inning = 0
+    stat_pitcher = getattr(pitcher, "_stat_target", pitcher)
+
+    while outs < 3:
+        hitter = lineup[i]
+        before_bases = bases[:]
+        before_outs = outs
+        outcome = plate_appearance(hitter, pitcher)
+        scored = 0
+        rbis = 0
+
+        if outcome == "out":
+            outs += 1
+            update_hitter_stats(hitter, "out")
+            stat_pitcher.outs_recorded += 1
+
+        elif outcome == "strikeout":
+            outs += 1
+            update_hitter_stats(hitter, "strikeout")
+            update_pitcher_stats(pitcher, "strikeout", 0)
+            stat_pitcher.outs_recorded += 1
+
+        elif outcome in ("walk", "hbp"):
+            bases, scored = apply_walk_or_hbp(bases)
+            runs += scored
+            update_hitter_stats(hitter, outcome)
+            update_pitcher_stats(pitcher, outcome, scored)
+
+        else:
+            bases, scored, rbis = apply_hit(bases, outcome)
+            runs += scored
+            hits_in_inning += 1
+            update_hitter_stats(hitter, outcome, rbis)
+            update_pitcher_stats(pitcher, outcome, scored)
+
+        plays.append({
+            "pitcher": pitcher.name,
+            "hitter": hitter.name,
+            "outs_before": before_outs,
+            "outs_after": outs,
+            "bases_before": before_bases,
+            "bases_after": bases[:],
+            "outcome": outcome,
+            "outcome_text": outcome_text(outcome),
+            "runs_scored": scored,
+            "rbis": rbis,
+        })
+
+        i = (i + 1) % n
+
+    return {
+        "runs": runs,
+        "next_idx": i,
+        "hits": hits_in_inning,
+        "pitcher": pitcher.name,
+        "plays": plays,
+    }
 
 def simulate_half_inning(lineup, pitcher, start_idx=0, verbose=False):
     outs = 0
@@ -185,6 +275,7 @@ def simulate_half_inning(lineup, pitcher, start_idx=0, verbose=False):
     bases = [False, False, False]
     i = start_idx
     n = len(lineup)
+    stat_pitcher = getattr(pitcher, "_stat_target", pitcher)
 
     while outs < 3:
         hitter = lineup[i]
@@ -193,13 +284,13 @@ def simulate_half_inning(lineup, pitcher, start_idx=0, verbose=False):
         if outcome == "out":
             outs += 1
             update_hitter_stats(hitter, "out")
-            pitcher.outs_recorded += 1
+            stat_pitcher.outs_recorded += 1
 
         elif outcome == "strikeout":
             outs += 1
             update_hitter_stats(hitter, "strikeout")
             update_pitcher_stats(pitcher, "strikeout", 0)
-            pitcher.outs_recorded += 1
+            stat_pitcher.outs_recorded += 1
 
         elif outcome in ("walk", "hbp"):
             bases, scored = apply_walk_or_hbp(bases)
@@ -216,3 +307,19 @@ def simulate_half_inning(lineup, pitcher, start_idx=0, verbose=False):
         i = (i + 1) % n
 
     return runs, i
+
+def simulate_game(away_lineup, home_lineup, away_pitcher, home_pitcher, verbose=False):
+    away_score = 0
+    home_score = 0
+    away_idx = 0
+    home_idx = 0
+    away_by_inning = []
+    home_by_inning = []
+    for _inning in range(1, 10):
+        r, away_idx = simulate_half_inning(away_lineup, home_pitcher, away_idx, verbose=verbose)
+        away_score += r
+        away_by_inning.append(r)
+        r, home_idx = simulate_half_inning(home_lineup, away_pitcher, home_idx, verbose=verbose)
+        home_score += r
+        home_by_inning.append(r)
+    return away_score, home_score, {"away_by_inning": away_by_inning, "home_by_inning": home_by_inning}
