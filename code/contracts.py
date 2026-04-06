@@ -169,7 +169,12 @@ def expected_salary(player) -> int:
 def expected_contract_value(player) -> float:
     ask_salary = expected_salary(player)
     ask_games = expected_length_games(player)
-    return ask_salary / max(1, ask_games)
+
+    old_salary = max(MIN_SALARY, int(getattr(player, "salary", MIN_SALARY)))
+    old_games = max(1, int(getattr(player, "contract_length", ask_games) or ask_games))
+    minimum_raise_value_per_game = (old_salary * 1.20) / max(1, old_games)
+
+    return max(ask_salary / max(1, ask_games), minimum_raise_value_per_game)
 
 
 def offer_contract_value(salary_offer: int, games_offer: int) -> float:
@@ -177,14 +182,20 @@ def offer_contract_value(salary_offer: int, games_offer: int) -> float:
 
 
 def attempt_negotiation(player, salary_offer: int, games_offer: int):
+    ask_salary = expected_salary(player)
     ask_games = expected_length_games(player)
     ask_value_per_game = expected_contract_value(player)
     offer_value_per_game = offer_contract_value(salary_offer, games_offer)
 
     value_ratio = offer_value_per_game / max(1e-9, ask_value_per_game)
-    randomness = random.uniform(-0.08, 0.08)
+    salary_ratio = salary_offer / max(1, ask_salary)
+    length_ratio = games_offer / max(1, ask_games)
 
-    score = 1.00 * value_ratio + randomness
+    # Compare offers by total contract value per game, so equivalent deals
+    # such as $40M/10G and $20M/5G are treated as equal.
+    # Raw salary still matters a little, but per-game value is the main driver.
+    randomness = random.uniform(-0.03, 0.03)
+    score = value_ratio * (1+randomness)
     accepted = score >= 1.0
 
     if accepted:

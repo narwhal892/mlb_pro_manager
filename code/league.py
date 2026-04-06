@@ -10,7 +10,7 @@ from player_gen_with_superstars_bust import (
     gen_pitcher,
     gen_pitching_coach,
 )
-from team import REQUIRED_LINEUP_POSITIONS, generate_team
+from team import REQUIRED_LINEUP_POSITIONS, TARGET_BULLPEN_SIZE, generate_team
 
 DIVISIONS = {
     "North": ["Kings", "Sharks", "Falcons", "Wolves"],
@@ -271,8 +271,14 @@ def compute_awards(teams):
     hitters = []
     pitchers = []
     for team in teams:
-        hitters.extend([p for p in (team.lineup + team.bench) if hasattr(p, "ops")])
-        pitchers.extend([p for p in (team.rotation + team.bullpen) if hasattr(p, "average_minus")])
+        for p in (team.lineup + team.bench):
+            if hasattr(p, "ops"):
+                setattr(p, "team_name", team.name)
+                hitters.append(p)
+        for p in (team.rotation + team.bullpen):
+            if hasattr(p, "average_minus"):
+                setattr(p, "team_name", team.name)
+                pitchers.append(p)
     if not hitters or not pitchers:
         return {"mvp": None, "batting": None, "cy": None}
 
@@ -281,7 +287,9 @@ def compute_awards(teams):
 
     mvp = max(hitters, key=lambda h: (h.homeruns * 4 + h.rbi + h.hits + h.walks))
     batting = max(hitters, key=avg)
-    cy = min(pitchers, key=lambda p: (p.era if p.outs_recorded > 0 else 99, -p.outs_recorded, p.walks))
+    eligible_pitchers = [p for p in pitchers if (getattr(p, "outs_recorded", 0) / 3.0) >= 22]
+    cy_pool = eligible_pitchers or pitchers
+    cy = min(cy_pool, key=lambda p: (p.era if p.outs_recorded > 0 else 99, -p.outs_recorded, p.walks))
     return {"mvp": mvp, "batting": batting, "cy": cy}
 
 
@@ -307,18 +315,6 @@ def fill_cpu_rosters_from_market(team, free_agent_hitters, free_agent_pitchers):
         team.lineup.append(match)
         current_positions.add(pos)
 
-    while len(_cpu_active_pitchers(team)) < 13:
-            filler = assign_salary_pitcher(gen_pitcher())
-            filler.contract_length = MAX_CONTRACT_GAMES
-            filler.contract_games_remaining = MAX_CONTRACT_GAMES
-
-            if len(_cpu_active_pitchers(team)) < 5:
-                filler.role = "SP"
-                team.rotation.append(filler)
-            else:
-                filler.role = "RP"
-                team.bullpen.append(filler)
-
     while len(_cpu_active_hitters(team)) < len(REQUIRED_LINEUP_POSITIONS) + 7 and free_agent_hitters:
         affordable = _affordable_candidates(free_agent_hitters, team)
         if not affordable:
@@ -327,22 +323,54 @@ def fill_cpu_rosters_from_market(team, free_agent_hitters, free_agent_pitchers):
         free_agent_hitters.remove(pick)
         team.bench.append(pick)
 
-    while len(_cpu_active_pitchers(team)) < 5 and free_agent_pitchers:
+    while len(team.real_rotation()) < 5 and free_agent_pitchers:
         starters = [p for p in free_agent_pitchers if getattr(p, "role", None) == "SP"]
         pick = _best_fit_player(starters or free_agent_pitchers, team)
         if pick is None:
             break
         free_agent_pitchers.remove(pick)
         pick.role = "SP"
-        team.rotation.append(pick)
+        empty_idx = next((i for i, p in enumerate(team.rotation) if team.is_empty_slot(p)), None)
+        if empty_idx is not None:
+            team.rotation[empty_idx] = pick
+        else:
+            team.rotation.append(pick)
 
-    while len(_cpu_active_pitchers(team)) < 13 and free_agent_pitchers:
+    while len(team.real_bullpen()) < TARGET_BULLPEN_SIZE and free_agent_pitchers:
         relievers = [p for p in free_agent_pitchers if getattr(p, "role", None) != "SP"]
         pick = _best_fit_player(relievers or free_agent_pitchers, team)
         if pick is None:
             break
         free_agent_pitchers.remove(pick)
-        team.bullpen.append(pick)
+        pick.role = "RP" if getattr(pick, "role", None) == "SP" else getattr(pick, "role", "RP")
+        empty_idx = next((i for i, p in enumerate(team.bullpen) if team.is_empty_slot(p)), None)
+        if empty_idx is not None:
+            team.bullpen[empty_idx] = pick
+        else:
+            team.bullpen.append(pick)
+
+    while len(team.real_rotation()) < 5:
+        filler = assign_salary_pitcher(gen_pitcher("SP"))
+        filler.contract_length = MAX_CONTRACT_GAMES
+        filler.contract_games_remaining = MAX_CONTRACT_GAMES
+        filler.role = "SP"
+        empty_idx = next((i for i, p in enumerate(team.rotation) if team.is_empty_slot(p)), None)
+        if empty_idx is not None:
+            team.rotation[empty_idx] = filler
+        else:
+            team.rotation.append(filler)
+
+    while len(team.real_bullpen()) < TARGET_BULLPEN_SIZE:
+        filler_role = "CL" if len(team.real_bullpen()) == TARGET_BULLPEN_SIZE - 1 else "RP"
+        filler = assign_salary_pitcher(gen_pitcher(filler_role))
+        filler.contract_length = MAX_CONTRACT_GAMES
+        filler.contract_games_remaining = MAX_CONTRACT_GAMES
+        filler.role = filler_role
+        empty_idx = next((i for i, p in enumerate(team.bullpen) if team.is_empty_slot(p)), None)
+        if empty_idx is not None:
+            team.bullpen[empty_idx] = filler
+        else:
+            team.bullpen.append(filler)
 
     team.repair_roster_structure()
     team.refresh_roles()

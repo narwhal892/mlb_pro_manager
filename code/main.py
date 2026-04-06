@@ -9,6 +9,7 @@ SPRITE_DIR = os.path.join(ASSETS_DIR, "game art")
 from settings import WIDTH, HEIGHT, FPS
 from season import Season
 from team import REQUIRED_LINEUP_POSITIONS
+from player_gen_with_superstars_bust import gen_pitcher, assign_salary_pitcher, MAX_CONTRACT_GAMES
 from league import (
     generate_free_agents,
     generate_coach_markets,
@@ -63,6 +64,11 @@ try:
     LOGO_SURF = pygame.transform.smoothscale(raw_logo, (520, 520))
 except Exception:
     LOGO_SURF = None
+
+try:
+    WORLD_SERIES_CHAMPIONS_SURF = pygame.image.load("world_series_champions.png").convert_alpha()
+except Exception:
+    WORLD_SERIES_CHAMPIONS_SURF = None
 
 
 def get_player_name(player):
@@ -1638,7 +1644,10 @@ def finalize_playoff_round_results(current_round, results):
     status_message = f"{current_round} complete."
     if season.playoff_round == "Complete":
         current_awards = snapshot_awards(compute_awards(season.teams))
-        game_state = "awards"
+        if season.champion == user_team:
+            game_state = "world_series_champions"
+        else:
+            game_state = "awards"
     else:
         game_state = "game_day"
     save_current_game()
@@ -1712,7 +1721,7 @@ def play_next_playoff_game():
         season.start_playoffs()
     if season.playoff_round == "Complete":
         current_awards = snapshot_awards(compute_awards(season.teams))
-        game_state = "awards"
+        game_state = "world_series_champions" if season.champion == user_team else "awards"
         return
     if playoff_round_state is None or playoff_round_state.get("round") != season.playoff_round:
         initialize_playoff_round_state()
@@ -1778,7 +1787,7 @@ def play_next_playoff_round():
 
     if season.playoff_round == "Complete":
         current_awards = snapshot_awards(compute_awards(season.teams))
-        game_state = "awards"
+        game_state = "world_series_champions" if season.champion == user_team else "awards"
         return
 
     # If this round is already initialized and user still has a live series,
@@ -1805,7 +1814,7 @@ def play_next_playoff_round():
     if advance_playoff_round_if_ready():
         if season.playoff_round == "Complete":
             current_awards = snapshot_awards(compute_awards(season.teams))
-            game_state = "awards"
+            game_state = "world_series_champions" if season.champion == user_team else "awards"
         else:
             initialize_playoff_round_state()
             if playoff_round_state and playoff_round_state.get("current_series"):
@@ -2995,7 +3004,8 @@ def draw_game_day():
         )
         y += 44
 
-    draw_text("UP/DOWN = game | S = box score | M = menu", 60, HEIGHT - 44, (210, 210, 210))
+    footer = "UP/DOWN = game | S = box score | ENTER = bracket | M = menu" if season and season.regular_season_over() else "UP/DOWN = game | S = box score | ENTER = menu | M = menu"
+    draw_text(footer, 60, HEIGHT - 44, (210, 210, 210))
 def draw_box_score():
     screen.fill((8, 18, 44))
     draw_text("BOX SCORE", 60, 36, (255, 225, 120), TITLE_FONT)
@@ -3165,6 +3175,31 @@ def draw_series_update(series):
         "Press ENTER to advance." if eliminated else "Press ENTER for the next lineup screen.",
         60, 330, (180, 180, 180), SMALL_FONT
     )
+def draw_world_series_champions_screen():
+    screen.fill((6, 8, 24))
+
+    if WORLD_SERIES_CHAMPIONS_SURF is not None:
+        img = WORLD_SERIES_CHAMPIONS_SURF
+        iw, ih = img.get_width(), img.get_height()
+        scale = min(WIDTH / max(1, iw), HEIGHT / max(1, ih))
+        new_size = (max(1, int(iw * scale)), max(1, int(ih * scale)))
+        scaled = pygame.transform.smoothscale(img, new_size)
+        x = (WIDTH - scaled.get_width()) // 2
+        y = (HEIGHT - scaled.get_height()) // 2
+        screen.blit(scaled, (x, y))
+    else:
+        draw_text("WORLD SERIES CHAMPIONS!", 120, 120, (255, 225, 120), TITLE_FONT)
+
+    banner = f"{user_team.name.upper()} WIN THE WORLD SERIES!"
+    prompt = "ENTER = awards | M = menu"
+
+    shadow = HEADER_FONT.render(banner, True, (0, 0, 0))
+    screen.blit(shadow, (42, HEIGHT - 88))
+    screen.blit(HEADER_FONT.render(banner, True, (255, 245, 180)), (40, HEIGHT - 90))
+
+    screen.blit(SMALL_FONT.render(prompt, True, (255, 255, 255)), (40, HEIGHT - 52))
+
+
 def draw_awards_screen():
     screen.fill((16, 16, 32))
     draw_text("SEASON AWARDS", 30, 20, (255, 225, 120), TITLE_FONT)
@@ -3557,12 +3592,12 @@ while running:
                 if season.regular_season_over():
                     if season.playoff_round == "Complete":
                         current_awards = snapshot_awards(compute_awards(season.teams))
-                        game_state = "awards"
+                        game_state = "world_series_champions" if season.champion == user_team else "awards"
                     else:
                         play_next_playoff_round()
                         if season.playoff_round == "Complete":
                             current_awards = snapshot_awards(compute_awards(season.teams))
-                            game_state = "awards"
+                            game_state = "world_series_champions" if season.champion == user_team else "awards"
                         elif playoff_round_state and playoff_round_state.get("current_series"):
                             lineup_plan = build_lineup_plan(user_team)
                             status_message = "Set your lineup for the next playoff game."
@@ -3747,8 +3782,7 @@ while running:
                                 initialize_playoff_round_state()
 
                             if playoff_round_state and playoff_round_state.get("current_series"):
-                                status_message = f"{playoff_round_state['round']} matchup ready."
-                                game_state = "playoff_intro"
+                                play_next_playoff_game()
                             else:
                                 game_state = "playoffs"
                         else:
@@ -4143,6 +4177,9 @@ while running:
                         status_message = msg
             elif event.key == pygame.K_n:
                 release_active_negotiation_to_free_agency()
+            elif event.key == pygame.K_m:
+                game_state = "menu"
+                status_message = "Contract negotiation paused."
             continue
 
         # --------------------------------------------------
@@ -4156,7 +4193,7 @@ while running:
             elif event.key == pygame.K_s:
                 game_state = "box_score"
             elif event.key == pygame.K_RETURN:
-                game_state = "menu"
+                game_state = "playoffs" if season and season.regular_season_over() else "menu"
             continue
 
         # --------------------------------------------------
@@ -4290,6 +4327,16 @@ while running:
             continue
 
         # --------------------------------------------------
+        # world series champions
+        # --------------------------------------------------
+        if game_state == "world_series_champions":
+            if event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                game_state = "awards"
+            elif event.key == pygame.K_n:
+                start_next_season()
+            continue
+
+        # --------------------------------------------------
         # playoffs
         # --------------------------------------------------
         if game_state == "playoffs":
@@ -4303,7 +4350,7 @@ while running:
                 play_next_playoff_round()
                 if season.playoff_round == "Complete":
                     current_awards = snapshot_awards(compute_awards(season.teams))
-                    game_state = "awards"
+                    game_state = "world_series_champions" if season.champion == user_team else "awards"
                 elif playoff_round_state and playoff_round_state.get("current_series"):
                     lineup_plan = build_lineup_plan(user_team)
                     status_message = "Set your lineup for the next playoff game."
@@ -4349,6 +4396,8 @@ while running:
         draw_trade_screen()
     elif game_state == "awards":
         draw_awards_screen()
+    elif game_state == "world_series_champions":
+        draw_world_series_champions_screen()
     elif game_state == "scouting":
         draw_scouting_page()
     elif game_state == "franchise_culture":
