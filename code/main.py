@@ -33,6 +33,15 @@ from franchise_culture import (
     refresh_budget_from_culture,
     sync_team_streak_display,
 )
+
+from minor_league_farm import (
+    ensure_farm_state,
+    advance_farm_system,
+    farm_players,
+    hire_farm_coach,
+    rename_farm,
+)
+
 from game_sim import simulate_half_inning
 from lineup import build_lineup_plan, apply_lineup_plan
 from contracts import NegotiationState, attempt_negotiation, scan_contract_events, expected_salary
@@ -148,6 +157,17 @@ def load_saved_game(filename="autosave.pkl"):
     except Exception as e:
         status_message = f"Load failed: {e}"
 
+def refill_coach_markets(target_size=8):
+    global free_agent_hitting_coaches, free_agent_pitching_coaches
+
+    new_hitting, new_pitching = generate_coach_markets()
+
+    while len(free_agent_hitting_coaches) < target_size and new_hitting:
+        free_agent_hitting_coaches.append(new_hitting.pop(0))
+
+    while len(free_agent_pitching_coaches) < target_size and new_pitching:
+        free_agent_pitching_coaches.append(new_pitching.pop(0))
+
 def load_sprite(filename):
     try:
         return pygame.image.load(os.path.join(SPRITE_DIR, filename)).convert_alpha()
@@ -253,6 +273,7 @@ def apply_loaded_state(state):
     global free_agent_tab, free_agent_confirm, pending_confirmation
     global negotiation_queue, active_negotiation, playoff_selected_matchup, news_feed
     global all_star_preview, contract_check_day, stats_year_index, playoff_round_state
+    global farm_name_editing, farm_name_text, status_message, game_state
 
     season = state["season"]
     user_team = state["user_team"]
@@ -346,6 +367,98 @@ def season_avg(player):
     ab = getattr(player, "ab", 0)
     return (getattr(player, "hits", 0) / ab) if ab > 0 else 0.0
 
+def draw_minor_league_farm_page():
+    ensure_farm_state(user_team)
+
+    screen.fill((8, 18, 44))
+    draw_text("MINOR LEAGUE FARM SYSTEM", 60, 36, (255, 225, 120), TITLE_FONT)
+
+    farm = user_team.minor_league_farm
+    coach = farm.coach
+
+    draw_text(f"Affiliate: {farm.team_name}", 60, 90, (240, 240, 240), HEADER_FONT)
+    if farm_name_editing:
+        draw_text(f"Typing new name: {farm_name_text}_", 60, HEIGHT - 70, (255, 225, 120))
+        draw_text("ENTER = save | ESC = cancel", 60, HEIGHT - 44, (210, 210, 210))
+    else:
+        draw_text("N = rename farm | 1-6 = hire coach | M = menu", 60, HEIGHT - 44, (210, 210, 210))
+
+    if coach:
+        draw_text(
+            f"Farm Coach: {coach.name} | {coach.summary()} | Salary {fmt_money_short(coach.salary)}",
+            60, 130,
+            (180, 220, 255),
+            SMALL_FONT
+        )
+    else:
+        draw_text("Farm Coach: None hired", 60, 130, (220, 180, 180), SMALL_FONT)
+
+    draw_text("COACH MARKET - Press 1-6 to hire", 60, 175, (255, 225, 120), HEADER_FONT)
+    draw_text("DEVELOPMENT LOG", 720, 175, (255, 225, 120), HEADER_FONT)
+
+    log_y = 215
+    for msg in user_team.minor_league_farm.development_log[:6]:
+        draw_text(msg, 720, log_y, (180, 240, 180), TINY_FONT)
+        log_y += 24
+    y = 215
+    for i, c in enumerate(user_team.farm_coach_market[:6]):
+        draw_text(
+            f"{i + 1}. {c.name:<18} {c.summary():<42} {fmt_money_short(c.salary)}",
+            80,
+            y,
+            (235, 235, 235),
+            SMALL_FONT
+        )
+        y += 26
+
+    draw_text("HITTERS", 60, 385, (255, 225, 120), HEADER_FONT)
+    y = 420
+    for p in user_team.minors_hitters[:6]:
+        if is_empty_slot(p):
+            continue
+        draw_text(
+            f"{p.name:<18} {getattr(p, 'position', '---'):<3} AVG {player_avg_text(p)} OBP {player_obp_text(p)} SLG {player_slg_text(p)} Contract {getattr(p, 'contract_games_remaining', 0)}G",
+            80,
+            y,
+            (235, 235, 235),
+            SMALL_FONT
+        )
+        y += 40
+    draw_text(
+    f"Bonuses: AVG +{getattr(p, 'coach_avg_bonus', 0)} "
+    f"OBP +{getattr(p, 'coach_obp_bonus', 0)} "
+    f"OPS +{getattr(p, 'coach_ops_bonus', 0)} "
+    f"Prog {getattr(p, 'farm_progress_games', 0)}",
+    100,
+    y + 16,
+    (140, 220, 140),
+    TINY_FONT
+)
+    draw_text("PITCHERS", 60, 590, (255, 225, 120), HEADER_FONT)
+    y = 625
+    for p in user_team.minors_pitchers[:4]:
+        if is_empty_slot(p):
+            continue
+        draw_text(
+            f"{p.name:<18} {getattr(p, 'role', '--'):<3} {pitcher_minus_slash_text(p)} Contract {getattr(p, 'contract_games_remaining', 0)}G",
+            80,
+            y,
+            (235, 235, 235),
+            SMALL_FONT
+        )
+        y += 40
+        draw_text(
+    f"Bonuses: AVG- +{getattr(p, 'coach_avg_bonus', 0)} "
+    f"OBP- +{getattr(p, 'coach_obp_bonus', 0)} "
+    f"SLG- +{getattr(p, 'coach_slg_bonus', 0)} "
+    f"Prog {getattr(p, 'farm_progress_games', 0)}",
+    100,
+    y + 16,
+    (140, 220, 140),
+    TINY_FONT
+)
+
+    draw_text("M = menu", 60, HEIGHT - 44, (210, 210, 210))
 
 def season_obp(player):
     ab = getattr(player, "ab", 0)
@@ -667,9 +780,12 @@ def simulate_game_with_box(away_team, home_team):
     }
 def finalize_team_game(team, usage_map):
     global status_message
-
+    if team is user_team:
+        ensure_farm_state(team)
+        advance_farm_system(team)
     used_names = set(name for name in usage_map if name)
     team.apply_coaching_progress()
+
     team.apply_spin_rate_lab_progress(games_per_boost=5)
     ensure_franchise_culture_state(team)
     decrement_streaks(team, 1)
@@ -724,8 +840,13 @@ scouting_focus = "market"   # "market" or "reports"
 season = None
 user_team = None
 news_feed = NewsFeed()
+minor_callup_contract = None
+minor_contract_days = 40
+minor_contract_salary = 750_000
 status_message = "Welcome to MLB Pro Manager"
 all_games_today = []
+farm_name_editing = False
+farm_name_text = ""
 selected_game_index = 0
 box_inning_index = 0
 viewed_team_index = 0
@@ -792,6 +913,19 @@ playoff_round_state = None
 # --------------------------------------------------
 # helpers
 # --------------------------------------------------
+
+def start_minor_callup_contract(player, player_type, minor_index):
+    global minor_callup_contract, minor_contract_days, minor_contract_salary, game_state
+
+    minor_callup_contract = {
+        "player": player,
+        "player_type": player_type,
+        "minor_index": minor_index,
+    }
+
+    minor_contract_days = 40
+    minor_contract_salary = 750_000
+    game_state = "minor_callup_contract"
 
 def hitter_lists():
     return {
@@ -975,6 +1109,7 @@ def consume_contract_day():
             cpu_team.repair_roster_structure()
         cpu_team.refresh_roles()
         cpu_team.ensure_batting_order()
+       
 
         push_cpu_team_toward_budget(cpu_team, free_agent_hitters, free_agent_pitchers)
 
@@ -987,6 +1122,25 @@ def consume_contract_day():
     user_team.ensure_within_budget()
     refresh_news()
     check_user_contracts()
+    refill_coach_markets()
+
+
+def run_pregame_contract_check():
+    global contract_check_day, game_state, status_message
+
+    if not season:
+        return False
+
+    user_team.ensure_within_budget()
+    refresh_news()
+    check_user_contracts()
+
+    if active_negotiation is not None:
+        game_state = "contract_negotiation"
+        status_message = f"{active_negotiation.player.name} needs a new deal before you can play."
+        return True
+
+    return False
 
 def player_is_unavailable(player):
     return getattr(player, "injured_games_remaining", 0) > 0
@@ -1316,8 +1470,50 @@ def validate_lineup_pitching_plan(team, plan):
             return False, f"{p.name} does not have enough stamina for relief."
 
     return True, ""
+def draw_minor_callup_contract_screen():
+    screen.fill((10, 18, 34))
 
+    if not minor_callup_contract:
+        draw_text("No minor league call-up pending.", 60, 80, (255, 120, 120), HEADER_FONT)
+        return
 
+    player = minor_callup_contract["player"]
+
+    draw_text("MINOR LEAGUE CALL-UP CONTRACT", 60, 50, (255, 225, 120), TITLE_FONT)
+    draw_text(f"Player: {player.name}", 60, 120, (240, 240, 240), HEADER_FONT)
+    draw_text(f"Offer: {minor_contract_days} games / {fmt_money(minor_contract_salary)}", 60, 170, (180, 220, 255), HEADER_FONT)
+
+    draw_text("UP/DOWN = salary  |  LEFT/RIGHT = days", 60, 250, (220, 220, 220))
+    draw_text("ENTER = sign and call up  |  ESC = cancel", 60, 285, (220, 220, 220))
+    draw_text("Minor league call-ups accept low rookie contracts.", 60, 340, (180, 180, 180))
+def confirm_minor_callup_contract():
+    global minor_callup_contract, game_state, status_message
+
+    if not minor_callup_contract:
+        game_state = "roster"
+        return
+
+    player = minor_callup_contract["player"]
+    player_type = minor_callup_contract["player_type"]
+    idx = minor_callup_contract["minor_index"]
+
+    if not user_team.can_afford(minor_contract_salary):
+        status_message = f"Cannot call up {player.name} — not enough budget."
+        return
+
+    player.salary = minor_contract_salary
+    player.contract_length = minor_contract_days
+    player.contract_games_remaining = minor_contract_days
+
+    if player_type == "hitter":
+        _ok, msg = user_team.call_up_minor_hitter(idx)
+    else:
+        _ok, msg = user_team.call_up_minor_pitcher(idx)
+
+    user_team.ensure_within_budget()
+    status_message = msg
+    minor_callup_contract = None
+    game_state = "roster"
 def perform_pitcher_move(src_name, src_idx, dst_name, dst_idx):
     lists = pitcher_lists()
     src = lists[src_name]
@@ -1406,12 +1602,11 @@ def handle_callup_senddown():
         if roster_focus == "minors_hitters":
             player = user_team.minors_hitters[selection_index["minors_hitters"]]
 
-            if not user_team.can_afford(player.salary):
-                status_message = f"Cannot call up {player.name} — not enough budget."
+            if is_empty_slot(player):
+                status_message = "That minor league slot is empty."
                 return
 
-            _ok, msg = user_team.call_up_minor_hitter(selection_index["minors_hitters"])
-            status_message = msg
+            start_minor_callup_contract(player, "hitter", selection_index["minors_hitters"])
             return
 
         # SEND DOWN HITTER
@@ -1426,12 +1621,11 @@ def handle_callup_senddown():
         if roster_pitcher_focus == "minors":
             player = user_team.minors_pitchers[selection_index["pitcher_minors"]]
 
-            if not user_team.can_afford(player.salary):
-                status_message = f"Cannot call up {player.name} — not enough budget."
+            if is_empty_slot(player):
+                status_message = "That minor league slot is empty."
                 return
 
-            _ok, msg = user_team.call_up_minor_pitcher(selection_index["pitcher_minors"])
-            status_message = msg
+            start_minor_callup_contract(player, "pitcher", selection_index["pitcher_minors"])
             return
 
         # SEND DOWN PITCHER
@@ -3461,7 +3655,7 @@ def draw_menu():
         "C = CPU rosters",
         "A = awards",
         "G = global scouting",
-        "F = franchise culture",
+        "F = minor league farm",
     ]
 
     y = 165
@@ -3530,7 +3724,42 @@ while running:
             if season is not None and user_team is not None:
                 game_state = "menu"
             continue
+        # --------------------------------------------------
+        # minor league farm
+        # --------------------------------------------------
+        elif game_state == "minor_league_farm":
+            if farm_name_editing:
+                if event.key == pygame.K_RETURN:
+                    ok, msg = rename_farm(user_team, farm_name_text)
+                    status_message = msg
+                    farm_name_editing = False
+                    farm_name_text = ""
 
+                elif event.key == pygame.K_ESCAPE:
+                    farm_name_editing = False
+                    farm_name_text = ""
+                    status_message = "Rename canceled."
+
+                elif event.key == pygame.K_BACKSPACE:
+                    farm_name_text = farm_name_text[:-1]
+
+                else:
+                    if event.unicode and len(farm_name_text) < 28:
+                        farm_name_text += event.unicode
+
+            else:
+                if event.key == pygame.K_m:
+                    game_state = "menu"
+
+                elif event.key == pygame.K_n:
+                    ensure_farm_state(user_team)
+                    farm_name_editing = True
+                    farm_name_text = user_team.minor_league_farm.team_name
+
+                elif pygame.K_1 <= event.key <= pygame.K_6:
+                    idx = event.key - pygame.K_1
+                    ok, msg = hire_farm_coach(user_team, idx)
+                    status_message = msg
         # --------------------------------------------------
         # title screen
         # --------------------------------------------------
@@ -3583,12 +3812,13 @@ while running:
             else:
                 game_state = "menu"
             continue
-
         # --------------------------------------------------
         # menu
         # --------------------------------------------------
         if game_state == "menu":
             if event.key == pygame.K_RETURN:
+                if run_pregame_contract_check():
+                    continue
                 if season.regular_season_over():
                     if season.playoff_round == "Complete":
                         current_awards = snapshot_awards(compute_awards(season.teams))
@@ -3621,7 +3851,8 @@ while running:
             elif event.key == pygame.K_t:
                 game_state = "trades"
             elif event.key == pygame.K_f:
-                game_state = "franchise_culture"
+                ensure_farm_state(user_team)
+                game_state = "minor_league_farm"
             elif event.key == pygame.K_d:
                 game_state = "game_day"
             elif event.key == pygame.K_b:
@@ -4223,7 +4454,28 @@ while running:
             elif event.key == pygame.K_p:
                 game_state = "playoffs"
             continue
+        # --------------------------------------------------
+        # minor league call-up contract
+        # --------------------------------------------------
+        if game_state == "minor_callup_contract":
+            if event.key == pygame.K_ESCAPE:
+                    minor_callup_contract = None
+                    game_state = "roster"
 
+            elif event.key == pygame.K_LEFT:
+                    minor_contract_days = max(10, minor_contract_days - 10)
+
+            elif event.key == pygame.K_RIGHT:
+                    minor_contract_days = min(100, minor_contract_days + 10)
+
+            elif event.key == pygame.K_DOWN:
+                    minor_contract_salary = max(250_000, minor_contract_salary - 50_000)
+
+            elif event.key == pygame.K_UP:
+                    minor_contract_salary = min(1_500_000, minor_contract_salary + 50_000)
+
+            elif event.key == pygame.K_RETURN:
+                    confirm_minor_callup_contract()
         # --------------------------------------------------
         # cpu roster
         # --------------------------------------------------
@@ -4404,7 +4656,10 @@ while running:
         draw_franchise_culture_page()
     elif game_state == "playoff_intro":
         draw_playoff_intro()
-
+    elif game_state == "minor_league_farm":
+        draw_minor_league_farm_page()
+    elif game_state == "minor_callup_contract":
+        draw_minor_callup_contract_screen()
     elif game_state == "inning_reveal":
         draw_inning_reveal()
 
